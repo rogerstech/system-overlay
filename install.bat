@@ -31,10 +31,9 @@ echo.
 :: Optional: create a desktop shortcut (no console window)
 set /p SHORTCUT="Create a desktop shortcut? (y/n): "
 if /i "%SHORTCUT%"=="y" (
-    for /f "delims=" %%i in ('py -3.12 -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do set PYTHONW=%%i
-    set SCRIPT_DIR=%~dp0
-    set SHORTCUT_PATH=%USERPROFILE%\Desktop\System Monitor.lnk
-    powershell -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%SHORTCUT_PATH%'); $sc.TargetPath = '%PYTHONW%'; $sc.Arguments = '\"%SCRIPT_DIR%system_overlay.py\"'; $sc.WorkingDirectory = '%SCRIPT_DIR%'; $sc.WindowStyle = 7; $sc.Save()"
+    for /f "delims=" %%i in ('where pyw') do set "PYWEXE=%%i"
+    set "SCRIPT_DIR=%~dp0"
+    powershell -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\System Monitor.lnk'); $sc.TargetPath = '%PYWEXE%'; $sc.Arguments = '-3.12 \"%SCRIPT_DIR%system_overlay.py\"'; $sc.WorkingDirectory = '%SCRIPT_DIR%'; $sc.WindowStyle = 7; $sc.Save()"
     echo Shortcut created on your Desktop.
 )
 
