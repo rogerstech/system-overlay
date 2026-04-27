@@ -311,9 +311,16 @@ class SystemOverlay:
     # ── Slow metric: CPU temp (background thread) ─────────────────────────────
 
     def _temp_loop(self):
-        while True:
-            self._cpu_temp = get_cpu_temp()
-            time.sleep(TEMP_SEC)
+        import traceback, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay_error.log")
+        try:
+            while True:
+                self._cpu_temp = get_cpu_temp()
+                time.sleep(TEMP_SEC)
+        except Exception:
+            with open(log_path, "a") as f:
+                f.write("\n--- _temp_loop crash ---\n")
+                traceback.print_exc(file=f)
 
     # ── Snap ──────────────────────────────────────────────────────────────────
 
@@ -334,6 +341,16 @@ class SystemOverlay:
     # ── System tray ───────────────────────────────────────────────────────────
 
     def _run_tray(self):
+        import traceback, os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay_error.log")
+        try:
+            self._run_tray_inner()
+        except Exception:
+            with open(log_path, "a") as f:
+                f.write("\n--- _run_tray crash ---\n")
+                traceback.print_exc(file=f)
+
+    def _run_tray_inner(self):
         def _snap_item(corner):
             return lambda icon, item: self.root.after(0, lambda: self._snap(corner))
 
@@ -369,4 +386,11 @@ class SystemOverlay:
 
 
 if __name__ == "__main__":
-    SystemOverlay()
+    import traceback, os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay_error.log")
+    try:
+        SystemOverlay()
+    except Exception:
+        with open(log_path, "w") as f:
+            traceback.print_exc(file=f)
+        raise
