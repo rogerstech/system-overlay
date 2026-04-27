@@ -18,13 +18,13 @@ A lightweight always-on-top system monitor for Windows 11. Shows CPU temp, CPU u
 
 | Metric | Source |
 |---|---|
-| CPU Temp | Native Windows ACPI thermal zones |
+| CPU Temp | LibreHardwareMonitorLib.dll (bundled, no app needed) |
 | CPU Usage | psutil |
 | RAM | psutil |
 | HDD (C:) | psutil |
 | Upload / Download | psutil |
 
-> **CPU Temp note:** Reads from the Windows ACPI thermal zone (`MSAcpi_ThermalZoneTemperature`), which is available on most modern systems without any extra software. If your hardware does not expose this, the field will show `N/A`.
+> **CPU Temp note:** Uses the bundled `LibreHardwareMonitorLib.dll` — no separate app needed. The overlay must be **run as Administrator** to access hardware sensors. `install.bat` downloads the DLL automatically and creates an admin shortcut. The title bar shows ⚡ when running as admin, ⚠ when not.
 
 ---
 
@@ -56,8 +56,10 @@ py -3.12 --version
 
 Or install manually:
 ```
-py -3.12 -m pip install psutil pystray Pillow
+py -3.12 -m pip install psutil pystray Pillow pythonnet
 ```
+
+`install.bat` also automatically downloads `LibreHardwareMonitorLib.dll` from the LibreHardwareMonitor GitHub releases into the script folder.
 
 ---
 
@@ -101,5 +103,11 @@ Run `py --list` — if 3.12 is missing, re-run the Python installer.
 **Missing module errors**
 Run `py -3.12 -m pip install psutil pystray Pillow` and try again.
 
-**CPU Temp shows N/A**
-Your system's ACPI does not expose thermal data through the standard Windows WMI interface. This is hardware-dependent and cannot be worked around without a third-party driver tool like LibreHardwareMonitor.
+**CPU Temp shows "No DLL"**
+`LibreHardwareMonitorLib.dll` is missing from the script folder. Re-run `install.bat` to download it automatically.
+
+**CPU Temp shows "Need admin"**
+The overlay is not running as Administrator. Use `run.bat` or the desktop shortcut created by `install.bat` — both are configured to request admin elevation automatically.
+
+**CPU Temp shows N/A despite admin + DLL**
+Your CPU may not be supported by the current version of LibreHardwareMonitor. Check the [LHM supported hardware list](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).

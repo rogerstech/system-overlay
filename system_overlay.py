@@ -1,7 +1,8 @@
 """
 System Monitor Overlay for Windows 11
-- No external apps required — works out of the box with Python + pip packages only
-- CPU temp via native Windows ACPI thermal zones (no OpenHardwareMonitor needed)
+- CPU temp via bundled LibreHardwareMonitorLib.dll (no separate app needed)
+- Falls back to ACPI WMI if DLL is not present
+- Must be run as Administrator for CPU temp to work
 - System tray icon for all controls
 - Always on top, semi-transparent, draggable
 """
@@ -10,6 +11,9 @@ import tkinter as tk
 import threading
 import time
 import subprocess
+import os
+import sys
+import ctypes
 import psutil
 import pystray
 from PIL import Image, ImageDraw
@@ -58,52 +62,98 @@ def fmt_gib(n_bytes: int) -> str:
     return f"{n_bytes / 1_073_741_824:.1f}"
 
 
-def _ps_query(cmd: str, timeout: int = 6) -> str:
-    """Run a PowerShell one-liner and return stdout (empty string on failure)."""
+# ── LibreHardwareMonitor integration ─────────────────────────────────────────
+
+_DLL_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LibreHardwareMonitorLib.dll")
+_lhm_ready   = False   # True once the .NET Computer object is open
+_lhm_cpu_hw  = []      # list of CPU Hardware objects to update each tick
+
+
+def _is_admin() -> bool:
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def _init_lhm() -> bool:
+    """
+    Load LibreHardwareMonitorLib.dll via pythonnet and open a Computer object
+    with CPU monitoring enabled.  Returns True on success.
+    Requires admin rights and the DLL present next to the script.
+    """
+    global _lhm_ready, _lhm_cpu_hw
+
+    if not os.path.exists(_DLL_PATH):
+        return False
+    if not _is_admin():
+        return False
+
+    try:
+        dll_dir = os.path.dirname(_DLL_PATH)
+        if dll_dir not in sys.path:
+            sys.path.insert(0, dll_dir)
+
+        import clr  # pythonnet
+        clr.AddReference("LibreHardwareMonitorLib")
+
+        from LibreHardwareMonitor.Hardware import Computer, HardwareType
+
+        computer = Computer()
+        computer.IsCpuEnabled = True
+        computer.Open()
+
+        _lhm_cpu_hw = [h for h in computer.Hardware
+                       if h.HardwareType == HardwareType.Cpu]
+        _lhm_ready = True
+        return True
+    except Exception:
+        return False
+
+
+def _get_temp_lhm() -> float | None:
+    """Poll the already-open LHM Computer object for the highest CPU temp."""
+    try:
+        from LibreHardwareMonitor.Hardware import SensorType
+        temps = []
+        for hw in _lhm_cpu_hw:
+            hw.Update()
+            for sensor in hw.Sensors:
+                if sensor.SensorType == SensorType.Temperature and sensor.Value is not None:
+                    name = sensor.Name.lower()
+                    if any(k in name for k in ("package", "cpu core", "core", "cpu")):
+                        temps.append(float(sensor.Value))
+        return max(temps) if temps else None
+    except Exception:
+        return None
+
+
+def _get_temp_acpi() -> float | None:
+    """Fallback: native Windows ACPI thermal zone via PowerShell (no admin needed)."""
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=0x08000000,   # CREATE_NO_WINDOW
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-WmiObject MSAcpi_ThermalZoneTemperature "
+             "-Namespace root/WMI -ErrorAction SilentlyContinue "
+             "| Measure-Object CurrentTemperature -Maximum).Maximum"],
+            capture_output=True, text=True, timeout=6,
+            creationflags=0x08000000,
         )
-        return result.stdout.strip()
-    except Exception:
-        return ""
-
-
-def get_cpu_temp() -> float | None:
-    """
-    Read CPU temp via native Windows ACPI thermal zones — no extra apps needed.
-    Falls back to None if the system does not expose this data.
-    """
-    # Primary: ACPI thermal zones (works on most modern systems)
-    out = _ps_query(
-        "(Get-WmiObject MSAcpi_ThermalZoneTemperature "
-        "-Namespace root/WMI -ErrorAction SilentlyContinue "
-        "| Measure-Object CurrentTemperature -Maximum).Maximum"
-    )
-    if out:
-        try:
+        out = result.stdout.strip()
+        if out:
             celsius = (float(out) / 10.0) - 273.15
             if 0 < celsius < 120:
                 return celsius
-        except ValueError:
-            pass
-
-    # Fallback: Win32_TemperatureProbe
-    out = _ps_query(
-        "(Get-WmiObject Win32_TemperatureProbe "
-        "-ErrorAction SilentlyContinue).CurrentReading"
-    )
-    if out:
-        try:
-            val = float(out)
-            if 0 < val < 120:
-                return val
-        except ValueError:
-            pass
-
+    except Exception:
+        pass
     return None
+
+
+def get_cpu_temp() -> float | None:
+    """Return CPU temp in °C using LHM if available, ACPI as fallback."""
+    if _lhm_ready:
+        return _get_temp_lhm()
+    return _get_temp_acpi()
 
 
 # ── Tray icon image ───────────────────────────────────────────────────────────
@@ -180,6 +230,11 @@ class SystemOverlay:
         self._prev_net = psutil.net_io_counters()
         self._prev_t   = time.monotonic()
 
+        # Attempt to initialise LibreHardwareMonitor (needs admin + DLL present)
+        self._lhm_ok      = _init_lhm()
+        self._admin       = _is_admin()
+        self._dll_present = os.path.exists(_DLL_PATH)
+
         self._setup_window()
         self._build_ui()
 
@@ -220,9 +275,10 @@ class SystemOverlay:
         bar.bind("<ButtonPress-1>", self._drag_start)
         bar.bind("<B1-Motion>",     self._drag_motion)
 
+        admin_tag = "  ⚡" if self._admin else "  ⚠"
         tk.Label(
-            bar, text="  ◈  SYS MONITOR",
-            bg=C["header"], fg=C["cyan"],
+            bar, text=f"  ◈  SYS MONITOR{admin_tag}",
+            bg=C["header"], fg=C["cyan"] if self._admin else C["warn"],
             font=("Segoe UI", 8, "bold"),
         ).pack(side="left", padx=4)
 
@@ -276,6 +332,10 @@ class SystemOverlay:
         if val is not None:
             pct = min(val, 100.0)
             self._rows["cpu_temp"].update(f"{val:.1f} °C", pct, heat_colour(pct))
+        elif not self._dll_present:
+            self._rows["cpu_temp"].update("No DLL", 0, C["warn"])
+        elif not self._admin:
+            self._rows["cpu_temp"].update("Need admin", 0, C["warn"])
         else:
             self._rows["cpu_temp"].update("N/A", 0, C["dim"])
 
